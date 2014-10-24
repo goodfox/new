@@ -5,7 +5,7 @@ require 'json'
 require 'faraday'
 
 # things you must configure
-PATH_TO_DROPBOX = "/Users/robin/Dropbox/backup/tweets/" # you need to create this folder
+PATH_TO_DROPBOX = "/Users/your_name/Dropbox/backup/tweets/" # you need to create this folder
 TWITTER_USER = "robinsloan"
 
 # get these from dev.twitter.com
