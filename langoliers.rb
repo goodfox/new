@@ -5,27 +5,33 @@ require 'json'
 require 'faraday'
 
 # things you must configure
-PATH_TO_DROPBOX = "/PATH_TO_YOUR_DROPBOX/tweets/" # you must create this folder
-TWITTER_USER = "YOUR_USERNAME"
+PATH_TO_DROPBOX = "/Users/robin/Dropbox/backup/tweets/" # you need to create this folder
+TWITTER_USER = "robinsloan"
 
-# get these from https://dev.twitter.com/apps
-CONSUMER_KEY = "FOO"
-CONSUMER_SECRET = "BAR"
-OAUTH_TOKEN = "BLEE"
-OAUTH_TOKEN_SECRET = "BAZ"
+# get these from dev.twitter.com
+CONSUMER_KEY = "your_consumer_key"
+CONSUMER_SECRET = "your_consumer_secret"
+OAUTH_TOKEN = "your_oauth_token"
+OAUTH_TOKEN_SECRET = "your_oauth_token_secret"
 
 # things you might want to change
-MAX_AGE_IN_DAYS = 28 # anything older than this is deleted
-DELAY_BETWEEN_DELETES = 0 # in seconds
+MAX_AGE_IN_DAYS = 10 # anything older than this is deleted / unfavorited
+DELAY_BETWEEN_DELETES = 0.5 # in seconds
+DELAY_BETWEEN_REQS = 45
 
-# you don't really need to mess with this
+# save tweets that have been massively favorited??? nah. all is vanity.
+FAVE_THRESHOLD = 9999
+
+# don't delete these (maybe a pinned tweet? an old favorite? whatever)
+IDS_TO_SAVE_FOREVER = [519676643829231616]
+
+# you don't need to mess with this
 API_TWEET_MAX = 3200
 TWEETS_PER_PAGE = 200 # api max is 250 or something... 200 seems like a nice round number
 NUM_PAGES = (API_TWEET_MAX / TWEETS_PER_PAGE).to_i
 MAX_AGE_IN_SECONDS = MAX_AGE_IN_DAYS*24*60*60
 NOW_IN_SECONDS = Time.now
 
-# fields the script will archive (in addition to media)
 FIELDS = [:id,
         :created_at,
         :text,
@@ -35,6 +41,13 @@ FIELDS = [:id,
         :in_reply_to_status_id]
 
 # tweet methods
+
+client = Twitter::REST::Client.new do |config|
+  config.consumer_key        = CONSUMER_KEY
+  config.consumer_secret     = CONSUMER_SECRET
+  config.access_token        = OAUTH_TOKEN
+  config.access_token_secret = OAUTH_TOKEN_SECRET
+end
 
 def save_to_dropbox(tweet)
   slender_tweet = {}
@@ -52,7 +65,6 @@ def save_to_dropbox(tweet)
   f.puts slender_tweet.to_json
   f.close
 
-  # save pictures
   tweet.media.each do |media,i|
     url = media.media_url
     puts "Saving image #{url}"
@@ -67,11 +79,13 @@ def save_to_dropbox(tweet)
   end
 end
 
-def delete_from_twitter(tweet)
+def delete_from_twitter(tweet,client)
   begin
-    Twitter.status_destroy(tweet.id)
-  rescue
-    puts "Error saving #{tweet.id}"
+    client.destroy_status(tweet.id)
+  rescue StandardError => e
+    puts e.inspect
+    puts "Error deleting #{tweet.id}; exiting hard"
+    exit
   else
     puts "Deleted"
   end
@@ -79,34 +93,35 @@ end
 
 # init twitter
 
-Twitter.configure do |config|
-  config.consumer_key = CONSUMER_KEY
-  config.consumer_secret = CONSUMER_SECRET
-  config.oauth_token = OAUTH_TOKEN
-  config.oauth_token_secret = OAUTH_TOKEN_SECRET
-end
-
-# begin script
-
 puts ""
 puts "What's that sound...?"
 puts ""
 
 timeline = []
 
+begin
+  tweet_max = client.user(TWITTER_USER).statuses_count < 3200 ? client.user(TWITTER_USER).statuses_count : API_TWEET_MAX
+  oldest_page = (tweet_max / TWEETS_PER_PAGE).to_i # we go to this page -- the older tweets -- first
+  puts "Oldest page is #{oldest_page}"
+rescue StandardError => e
+  puts e
+  puts "Error getting info about @#{TWITTER_USER}. Try again."
+  exit
+end
+
 error_count = 0
 
-NUM_PAGES.times do |i|
+4.times do |i|
   begin
     puts "Requesting tweets #{i*TWEETS_PER_PAGE}-#{(i+1)*TWEETS_PER_PAGE}"
-    timeline = timeline.concat(Twitter.user_timeline(TWITTER_USER,{:count=>TWEETS_PER_PAGE,:page=>i,:include_entities=>true,:include_rts=>true}))
+    timeline = timeline.concat(client.user_timeline(TWITTER_USER,{:count=>TWEETS_PER_PAGE,:page=>i,:include_entities=>true,:include_rts=>true}))
   rescue
     error_count += 1
     if (error_count > 5) then
       puts "Too many errors! Try again later."
       exit
     else
-      puts "Error getting tweets, retrying after #{2**error_count} seconds..."
+      puts "Error getting tweets #{oldest_page*TWEETS_PER_PAGE}-#{tweet_max}, retrying after #{2**error_count} seconds..."
       sleep(2**error_count)
       retry
     end
@@ -121,15 +136,21 @@ timeline.each do |tweet|
 
   if (tweet_age < MAX_AGE_IN_SECONDS) then
     puts "Ignored a tweet #{(tweet_age/(24*60*60)).round} days old"
+  elsif (tweet.favorite_count >= FAVE_THRESHOLD) then
+    puts "Ignored a tweet with #{tweet.favorite_count} faves"
+  elsif IDS_TO_SAVE_FOREVER.include?(tweet.id) then
+    puts "Ignored a tweet that is to be saved forever"
   else
     puts "Preparing to delete a tweet #{(tweet_age/(24*60*60)).round} days old"
 
     begin
       save_to_dropbox(tweet)
-    rescue
-      puts "Error saving #{tweet.id}"
+    rescue StandardError => e
+      puts e.inspect
+      puts "Error saving #{tweet.id}; exiting hard"
+      exit
     else
-      delete_from_twitter(tweet)
+      delete_from_twitter(tweet,client)
     end
   end
 
@@ -139,4 +160,3 @@ timeline.each do |tweet|
   sleep DELAY_BETWEEN_DELETES
 end
 
-puts "Done! Remaining API reqs this hour: #{Twitter.rate_limit_status.remaining_hits.to_s}"
