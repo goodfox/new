@@ -6,7 +6,7 @@ require 'faraday'
 
 # things you must configure
 PATH_TO_DROPBOX = "/Users/your_name/Dropbox/backup/tweets/" # you need to create this folder
-TWITTER_USER = "robinsloan"
+TWITTER_USER = "your_twitter_username"
 
 # get these from dev.twitter.com
 CONSUMER_KEY = "your_consumer_key"
